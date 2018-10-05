@@ -38,6 +38,7 @@
 @property (nonatomic, copy) RCTDirectEventBlock onUrlChanged;
 @property (nonatomic, copy) RCTDirectEventBlock onNavigationResponse;
 @property (assign) BOOL sendCookies;
+@property (assign) BOOL useWKCookieStore;
 @property (nonatomic, strong) WKUserScript *atStartScript;
 @property (nonatomic, strong) WKUserScript *atEndScript;
 
@@ -348,6 +349,50 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
   [_webView stopLoading];
 }
 
+- (NSString *) cookieDescription:(NSHTTPCookie *)cookie {
+    NSMutableString *cDesc = [[NSMutableString alloc] init];
+    [cDesc appendFormat:@"%@=%@;",
+     [[cookie name] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding],
+     [[cookie value] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+    if ([cookie.domain length] > 0)
+      [cDesc appendFormat:@"domain=%@;", [cookie domain]];
+    if ([cookie.path length] > 0)
+      [cDesc appendFormat:@"path=%@;", [cookie path]];
+    if (cookie.expiresDate != nil)
+          [cDesc appendFormat:@"expiresDate=%@;", [cookie expiresDate]];
+    if (cookie.HTTPOnly == YES)
+      [cDesc appendString:@"HttpOnly;"];
+    if (cookie.secure == YES)
+      [cDesc appendString:@"Secure;"];
+    return cDesc;
+}
+- (void) copyCookies {
+  NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
+  NSArray* array = [storage cookies];
+  if (@available(ios 11,*)) {
+    // The webView websiteDataStore only gets initialized, when needed. Setting cookies on the dataStore's
+    // httpCookieStore doesn't seem to initialize it. That's why fetchDataRecordsOfTypes is called.
+    // All the cookies of the sharedHttpCookieStorage, which is used in react-native-cookie,
+    // are copied to the webSiteDataStore's httpCookieStore.
+    // https://bugs.webkit.org/show_bug.cgi?id=185483
+    [_webView.configuration.websiteDataStore fetchDataRecordsOfTypes:[NSSet<NSString *> setWithObject:WKWebsiteDataTypeCookies] completionHandler:^(NSArray<WKWebsiteDataRecord *> *records) {
+      for (NSHTTPCookie* cookie in array) {
+        [_webView.configuration.websiteDataStore.httpCookieStore setCookie:cookie completionHandler:nil];
+      }
+    }];
+  } else {
+    // Create WKUserScript for each cookie
+    // Cookies are injected with Javascript AtDocumentStart
+    for (NSHTTPCookie* cookie in array){
+      NSString* cookieSource = [NSString stringWithFormat:@"document.cookie = '%@'", [self cookieDescription:cookie]];
+      WKUserScript* cookieScript = [[WKUserScript alloc]
+                                    initWithSource:cookieSource
+                                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
+      [_webView.configuration.userContentController addUserScript:cookieScript];
+    }
+  }
+}
+
 - (void)setSource:(NSDictionary *)source
 {
   if (!_webView) {
@@ -358,6 +403,11 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
   if (![_source isEqualToDictionary:source]) {
     _source = [source copy];
     _sendCookies = [source[@"sendCookies"] boolValue];
+    _useWKCookieStore = [source[@"useWKCookieStore"] boolValue];
+    if (_useWKCookieStore) {
+      [self copyCookies];
+    }
+
     if ([source[@"customUserAgent"] length] != 0 && [_webView respondsToSelector:@selector(setCustomUserAgent:)]) {
       [_webView setCustomUserAgent:source[@"customUserAgent"]];
     }
@@ -512,6 +562,28 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 
 #pragma mark - WKNavigationDelegate methods
 
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    if (_sendCookies) {
+    NSHTTPURLResponse *response = (NSHTTPURLResponse *)navigationResponse.response;
+    NSArray *cookies = [NSHTTPCookie cookiesWithResponseHeaderFields:[response allHeaderFields] forURL:response.URL];
+    for (NSHTTPCookie *cookie in cookies) {
+      [[NSHTTPCookieStorage sharedHTTPCookieStorage] setCookie:cookie];
+    }
+  }
+  if (_onNavigationResponse) {
+    NSDictionary *headers = ((NSHTTPURLResponse *)navigationResponse.response).allHeaderFields;
+    NSInteger statusCode = ((NSHTTPURLResponse *)navigationResponse.response).statusCode;
+    NSMutableDictionary<NSString *, id> *event = [self baseEvent];
+    [event addEntriesFromDictionary:@{
+                                      @"headers": headers,
+                                      @"status": [NSHTTPURLResponse localizedStringForStatusCode:statusCode],
+                                      @"statusCode": @(statusCode),
+                                      }];
+    _onNavigationResponse(event);
+  }
+  decisionHandler(WKNavigationResponsePolicyAllow);
+}
+
 #if DEBUG
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential * _Nullable))completionHandler {
   NSURLCredential * credential = [[NSURLCredential alloc] initWithTrust:[challenge protectionSpace].serverTrust];
@@ -664,24 +736,6 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
 {
   RCTLogWarn(@"Webview Process Terminated");
-}
-
-- (void)webView:(__unused WKWebView *)webView
-  decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
-                  decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
-  if (_onNavigationResponse) {
-    NSDictionary *headers = ((NSHTTPURLResponse *)navigationResponse.response).allHeaderFields;
-    NSInteger statusCode = ((NSHTTPURLResponse *)navigationResponse.response).statusCode;
-    NSMutableDictionary<NSString *, id> *event = [self baseEvent];
-    [event addEntriesFromDictionary:@{
-                                      @"headers": headers,
-                                      @"status": [NSHTTPURLResponse localizedStringForStatusCode:statusCode],
-                                      @"statusCode": @(statusCode),
-                                      }];
-    _onNavigationResponse(event);
-  }
-
-  decisionHandler(WKNavigationResponsePolicyAllow);
 }
 
 @end
