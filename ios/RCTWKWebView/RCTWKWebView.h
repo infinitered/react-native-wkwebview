@@ -36,6 +36,7 @@ shouldStartLoadForRequest:(NSMutableDictionary<NSString *, id> *)request
 @property (nonatomic, assign) BOOL injectedJavaScriptForMainFrameOnly;
 @property (nonatomic, copy) NSString *injectJavaScript;
 @property (nonatomic, copy) NSString *injectedJavaScript;
+@property (nonatomic, copy) NSString *injectedCookiesSource;
 @property (nonatomic, assign) BOOL hideKeyboardAccessoryView;
 @property (nonatomic, assign) BOOL keyboardDisplayRequiresUserAction;
 

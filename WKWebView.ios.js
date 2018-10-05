@@ -187,6 +187,7 @@ class WKWebView extends React.Component {
      * Receive scroll events from view
      */
     onScroll: PropTypes.func,
+    onUrlChanged: PropTypes.func,
     /**
      * A callback to get response headers, http status code and http localized status code.
      */
@@ -221,6 +222,10 @@ class WKWebView extends React.Component {
      * Sets the JS to be injected when the webpage loads.
      */
     injectedJavaScript: PropTypes.string,
+        /**
+     * A domain whose cookies will be injected into `document.cookies`.
+     */
+    injectedCookiesSource: PropTypes.string,
     /**
      * Allows custom handling of any webview requests by a JS handler. Return true
      * or false from this method to continue loading the request.
@@ -339,6 +344,7 @@ class WKWebView extends React.Component {
         injectedJavaScriptForMainFrameOnly={this.props.injectedJavaScriptForMainFrameOnly}
         injectJavaScript={this.props.injectJavaScript}
         injectedJavaScript={this.props.injectedJavaScript}
+        injectedCookiesSource={this.props.injectedCookiesSource}
         bounces={this.props.bounces}
         scrollEnabled={this.props.scrollEnabled}
         contentInset={this.props.contentInset}
@@ -355,6 +361,7 @@ class WKWebView extends React.Component {
         onProgress={this._onProgress}
         onMessage={this._onMessage}
         onScroll={this._onScroll}
+        onUrlChanged={this._onUrlChanged}
         onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
         pagingEnabled={this.props.pagingEnabled}
         directionalLockEnabled={this.props.directionalLockEnabled}
@@ -510,6 +517,11 @@ class WKWebView extends React.Component {
     const onScroll = this.props.onScroll;
     onScroll && onScroll(event.nativeEvent);
   };
+
+  _onUrlChanged = (event: Event) => {
+    const onUrlChanged = this.props.onUrlChanged;
+    onUrlChanged && onUrlChanged(event.nativeEvent);
+  }
 
   _onNavigationResponse = (event: Event) => {
     const { onNavigationResponse } = this.props;
